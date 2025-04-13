@@ -1,0 +1,336 @@
+---
+title: "Clusterização Municípios Brasileiros Turismo"
+output: html_notebook
+---
+
+Clusterização dos Municípios Turísticos do Brasil
+Trabalho de TCC de Graduação em Estatística
+
+```{r}
+library(factoextra)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(janitor)
+library(clue)
+library(ggridges)
+library(patchwork)
+library(dbscan)
+
+file_path <- "data/RELATORIO_CATEGORIZACAO_2019-Portal.xlsx"
+df <- read_excel(file_path)
+df <- na.omit(df)
+df <- df %>% clean_names()
+
+continuous_cols <- c(
+  "quantidade_empregos",
+  "quantidade_estabelecimentos",
+  "quantidade_visitas_estimadas_internacional",
+  "quantidade_visitas_estimadas_nacional",
+  "arrecadacao")
+
+head(df)
+```
+
+Análise Exploratória: vamos verificar a distribuição de municípios entre os clusters
+
+```{r}
+dplyr::count(df, cluster)
+```
+Análise exploratória: vamos verificar a correlação entre as variáveis
+
+```{r}
+cormat <- round(cor(select(df, continuous_cols)),2)
+cormat_df <- as.data.frame(cormat)
+cormat_df$Var1 <- rownames(cormat_df)
+cor_long <- cormat_df |>
+  pivot_longer(-Var1, names_to = "Var2", values_to = "Correlação")
+
+ggplot(cor_long, aes(x = Var1, y = Var2, fill = Correlação)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0.5) +
+  coord_fixed() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(axis.title.x = element_blank()) +
+  theme(axis.title.y = element_blank())
+```
+
+Análise exploratória: plotar distribuição das variáveis por cluster
+
+```{r}
+long_format_df <- df %>%
+  select(cluster, all_of(continuous_cols)) %>%
+  pivot_longer(
+    cols = all_of(continuous_cols),
+    names_to = "Variable",
+    values_to = "Value"
+  )
+
+ggplot(long_format_df, aes(x = Value, y = cluster, fill = cluster)) +
+  geom_density_ridges(scale = 1.2, alpha = 0.8, rel_min_height = 0.01, color = "white") +
+  facet_wrap(~ Variable, scales = "free_x") +
+  theme_minimal() +
+  labs(
+    title = "Distribuição das Variáveis por Cluster",
+    x = "Value",
+    y = "CLUSTER"
+  ) +
+  theme(legend.position = "none")
+
+```
+
+Preparação dos Dados: vamos normalizar os dados poder aplicar o algoritmo de clusterização
+
+```{r}
+# Apply scale to those columns and save as a new dataset
+df_scale = select(df, continuous_cols)
+df_scale[continuous_cols] <- scale(df_scale[continuous_cols])
+
+```
+
+K-means: vamos gerar a clusterização por k-means usando k=5 e a função de distancia padrão (euclidiana)
+
+```{r}
+set.seed(42)
+kmeans_euclidean <- kmeans(df_scale, centers = 5, nstart = 25)
+str(kmeans_euclidean)
+
+```
+
+Visualização dos clusters
+
+```{r}
+fviz_cluster(kmeans_euclidean, data = df_scale, stand=FALSE, main="Representação dos Cluster em dimensionalidade reduzida por PCA")
+
+```
+
+Calcular concordância do resultado com clusters originais
+
+```{r}
+df$cluster_kmeans_euclidean <- as.character(kmeans_euclidean$cluster)
+
+cl_part_orig <- as.cl_partition(as.integer(factor(df$cluster)))
+cl_part_euclidean  <- as.cl_partition(df$cluster_kmeans_euclidean)
+
+cl_agreement(cl_part_orig, cl_part_euclidean, method = "cRand") 
+cl_agreement(cl_part_orig, cl_part_euclidean, method = "NMI") 
+```
+
+Exibir número de observações em cada cluster
+
+```{r}
+dplyr::count(df, cluster_kmeans_euclidean)
+
+```
+
+Visualizar clusters em scatter plots: clusters originais vs clusters atribuídos
+
+```{r fig.align="center", echo = FALSE,fig.width = 14}
+x_var <- "quantidade_estabelecimentos"
+y_var <- "quantidade_visitas_estimadas_nacional"
+
+p1 <- ggplot(df, aes_string(x = x_var, y = y_var, color = "cluster")) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusters originais") +
+  theme_minimal()
+
+p2 <- ggplot(df, aes_string(x = x_var, y = y_var, color = "cluster_kmeans_euclidean")) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusters KMeans distancia euclideana") +
+  theme_minimal()
+
+# Combine plots side by side
+p1 + p2
+```
+
+Aplicar logaritmo: vamos repetir o procedimento usando o logaritmo ao invés dos valores brutos
+
+```{r}
+df_log <- df %>%
+  mutate(across(
+    all_of(continuous_cols),
+    ~ log(.x + 1)  # add 1 to avoid log(0)
+
+  ))
+df_log <- select(df_log, continuous_cols)
+kmeans_euclidean_log <- kmeans(df_log, centers = 5, nstart = 25)
+df$cluster_kmeans_euclidean_log <- as.character(kmeans_euclidean_log$cluster)
+
+cl_part_euclidean_log  <- as.cl_partition(df$cluster_kmeans_euclidean_log)
+
+cl_agreement(cl_part_orig, cl_part_euclidean_log, method = "cRand") 
+cl_agreement(cl_part_orig, cl_part_euclidean_log, method = "NMI") 
+
+```
+
+Exibir número de observações em cada cluster
+
+```{r}
+dplyr::count(df, cluster_kmeans_euclidean_log)
+
+```
+
+
+```{r fig.align="center", echo = FALSE,fig.width = 14}
+p1 <- ggplot(df, aes_string(x = x_var, y = y_var, color = "cluster")) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusters originais (log)") +
+  theme_minimal()
+
+p2 <- ggplot(df, aes_string(x = x_var, y = y_var, color = "cluster_kmeans_euclidean_log")) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusters KMeans distancia euclideana (log)") +
+  theme_minimal()
+
+# Combine plots side by side
+p1 + p2
+```
+
+```{r fig.align="center", echo = FALSE,fig.width = 14}
+
+p1 <- ggplot(subset(df, cluster_kmeans_euclidean_log != "5"), aes_string(x = x_var, y = y_var, color = "cluster")) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusters originais exceto cluster 5 (log)") +
+  theme_minimal()
+
+p2 <- ggplot(subset(df, cluster_kmeans_euclidean_log != "5"), aes_string(x = x_var, y = y_var, color = "cluster_kmeans_euclidean_log")) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusters KMeans distancia euclideana exceto cluster 5 (log)") +
+  theme_minimal()
+
+# Combine plots side by side
+p1 + p2
+```
+
+
+# Usar diferentes funções de distancia
+
+```{r}
+# Compare using different distance functions
+dist_manhattan <- get_dist(df_scale, method = "manhattan")
+dist_pearson <- get_dist(df_scale, method = "pearson")
+dist_spearman <- get_dist(df_scale, method = "spearman")
+dist_kendall <- get_dist(df_scale, method = "kendall")
+
+pam_manhattan <- pam(dist_manhattan, k = 5, nstart = 25)
+pam_pearson <- pam(dist_pearson, k = 5, nstart = 25, diss = TRUE)
+pam_spearman <- pam(dist_spearman, k = 5, nstart = 25, diss = TRUE)
+pam_kendall <- pam(dist_kendall, k = 5, nstart = 25, diss = TRUE)
+
+df$cluster_kmeans_manhattan <- as.character(pam_manhattan$clustering)
+df$cluster_kmeans_pearson <- as.character(pam_pearson$clustering)
+df$cluster_kmeans_spearman <- as.character(pam_spearman$clustering)
+df$cluster_kmeans_kendall <- as.character(pam_kendall$clustering)
+
+cluster_cols <- c("cluster_kmeans_euclidean", "cluster_kmeans_manhattan", "cluster_kmeans_pearson", "cluster_kmeans_spearman", "cluster_kmeans_kendall") 
+results <- lapply(cluster_cols, function(col) {
+  cl_part <- as.cl_partition(df[[col]])
+  rand <- cl_agreement(cl_part_orig, cl_part, method = "cRand")
+  nmi  <- cl_agreement(cl_part_orig, cl_part, method = "NMI")
+  
+  data.frame(
+    Distance = gsub("cluster_kmeans_", "", col),
+    Rand = rand,
+    NMI = nmi
+  )
+})
+agreement_df <- do.call(rbind, results)
+agreement_df <- agreement_df[order(-agreement_df$Rand), ]
+agreement_df
+```
+
+```{r fig.align="center", echo = FALSE,fig.width = 14}
+p1 <- ggplot(df, aes_string(x = x_var, y = y_var, color = "cluster")) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusters originais") +
+  theme_minimal()
+
+p2 <- ggplot(df, aes_string(x = x_var, y = y_var, color = "cluster_kmeans_pearson")) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusters KMeans coef correlação Pearson") +
+  theme_minimal()
+
+# Combine plots side by side
+p1 + p2
+```
+
+
+```{r fig.align="center", echo = FALSE,fig.width = 14}
+p1 <- ggplot(df, aes_string(x = x_var, y = y_var, color = "cluster")) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusters originais") +
+  theme_minimal()
+
+p2 <- ggplot(df, aes_string(x = x_var, y = y_var, color = "cluster_kmeans_manhattan")) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusters KMeans mahnattan") +
+  theme_minimal()
+
+# Combine plots side by side
+p1 + p2
+```
+
+```{r}
+table(df$cluster, df$cluster_kmeans_manhattan)
+```
+
+# Pre-inicialização dos centróides: vamos tentar rodar o k-means pré-inicializando os centróides
+
+```{r}
+percentiles <- c(0.50, 0.60, 0.70, 0.90, 0.95)
+init_centers <- t(sapply(continuous_cols, function(var) {
+  quantile(df_scale[[var]], probs = percentiles, na.rm = TRUE)
+}))
+init_centers <- as.matrix(init_centers)
+init_centers <- t(init_centers)
+
+kmeans_pre_init_euclidean <- kmeans(
+  x = df_scale[, continuous_cols],
+  centers = init_centers,
+  iter.max = 100,
+  algorithm = "Lloyd")
+
+df$cluster_kmeans_euclidean_pre_init <- as.character(kmeans_pre_init_euclidean$cluster)
+
+cl_part_euclidean_pre_init  <- as.cl_partition(df$cluster_kmeans_euclidean_pre_init)
+
+cl_agreement(cl_part_orig, cl_part_euclidean_pre_init, method = "cRand") 
+cl_agreement(cl_part_orig, cl_part_euclidean_pre_init, method = "NMI") 
+
+```
+
+
+# DBScan
+
+```{r}
+dbscan_result <- dbscan(df_scale, eps = 0.08, minPts = 5)
+df$cluster_dbscan <- as.character(dbscan_result$cluster)
+cl_part_dbscan <- as.cl_partition(df$cluster_dbscan)
+
+cl_agreement(cl_part_orig, cl_part_dbscan, method = "cRand")
+cl_agreement(cl_part_orig, cl_part_dbscan, method = "NMI")
+```
+
+
+```{r fig.align="center", echo = FALSE,fig.width = 14}
+p1 <- ggplot(df, aes_string(x = x_var, y = y_var, color = "cluster")) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusters originais") +
+  theme_minimal()
+
+p2 <- ggplot(df, aes_string(x = x_var, y = y_var, color = "cluster_dbscan")) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusters DBScan") +
+  theme_minimal()
+
+# Combine plots side by side
+p1 + p2
+```
+
+
+```{r}
+table(df$cluster, df$cluster_dbscan)
+
+```
+
