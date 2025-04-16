@@ -1,0 +1,201 @@
+---
+title: "Clusterização Municípios Brasileiros Turismo"
+output: html_notebook
+---
+
+Clusterização dos Municípios Turísticos do Brasil  
+Trabalho de TCC de Graduação em Estatística
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(janitor)
+library(clue)
+library(ggplot2)
+library(ggridges)
+library(patchwork)
+library(cluster)
+library(factoextra)
+library(dbscan)
+
+file_path <- 'data/CLUSTERS_VARIAVEIS_ORIGINAIS_2019.xlsx'
+df <- read_excel(file_path)
+
+ibeu_path <- 'data/IBEU_Brasil_Municipios.xlsx'
+ibeu_df <- read_excel(ibeu_path)
+```
+
+
+Convert the state abbreviation in df to the state name
+
+```{r}
+# Create named vector: abbreviation as names, full state names as values
+state_map <- c(
+  AC = "Acre",
+  AL = "Alagoas",
+  AP = "Amapá",
+  AM = "Amazonas",
+  BA = "Bahia",
+  CE = "Ceará",
+  DF = "Distrito Federal",
+  ES = "Espírito Santo",
+  GO = "Goiás",
+  MA = "Maranhão",
+  MT = "Mato Grosso",
+  MS = "Mato Grosso do Sul",
+  MG = "Minas Gerais",
+  PA = "Pará",
+  PB = "Paraíba",
+  PR = "Paraná",
+  PE = "Pernambuco",
+  PI = "Piauí",
+  RJ = "Rio de Janeiro",
+  RN = "Rio Grande do Norte",
+  RS = "Rio Grande do Sul",
+  RO = "Rondônia",
+  RR = "Roraima",
+  SC = "Santa Catarina",
+  SP = "São Paulo",
+  SE = "Sergipe",
+  TO = "Tocantins"
+)
+df$state_name <- state_map[df$uf]
+
+```
+
+Try to merge the datasets
+
+```{r}
+library(stringi)
+
+clean_str <- function(x) {
+  x %>%
+    tolower() %>%
+    stri_trans_general(id = "Latin-ASCII") %>%
+    trimws()
+
+}
+
+df <- df %>%
+  mutate(across(c(state_name, municipio), clean_str))
+
+ibeu_df <- ibeu_df %>%
+  mutate(across(c(UF, Municipio), clean_str))
+
+library(dplyr)
+library(stringi)
+
+clean_state_name <- function(x) {
+  x %>%
+    tolower() %>%
+    stri_trans_general(id = "Latin-ASCII") %>%
+    gsub("-", "", .) %>%  # remove hyphens like in "espi-rito"
+    trimws()
+}
+
+ibeu_df <- ibeu_df %>%
+  mutate(UF_clean = clean_state_name(UF))
+
+
+merged_df <- df %>% left_join(ibeu_df, by = c("state_name" = "UF_clean", "municipio" = "Municipio"))
+merged_df$IBEU = as.numeric(merged_df$IBEU)
+```
+
+Fill missing values: the merge fails for 171 rows, lets fill those NAs with the column-wise average across all non-missing rows
+
+```{r}
+target_cols <- c("IBEU", "Mobilidade", "Ambiental", "Habitacional", "Serviços", "Insfraestrutura")
+for (col in target_cols) {
+  merged_df[[col]] = as.numeric(merged_df[[col]])
+}
+means <- colMeans(merged_df[target_cols], na.rm = TRUE)
+for (col in target_cols) {
+  merged_df[[col]][is.na(merged_df[[col]])] <- means[col]
+}
+
+```
+
+Scale merged dataset and apply k-means using Manhattan distance
+
+```{r}
+continuous_cols <- c(
+  "quantidade_empregos",
+  "quantidade_estabelecimentos",
+  "quantidade_visitas_estimadas_internacional",
+  "quantidade_visitas_estimadas_nacional",
+  "arrecadacao",
+  "IBEU")
+
+df_scale = select(merged_df, continuous_cols)
+df_scale[continuous_cols] <- scale(df_scale[continuous_cols])
+
+dist_manhattan <- get_dist(df_scale, method = "manhattan")
+
+set.seed(1)
+pam_manhattan <- pam(dist_manhattan, k = 5, nstart = 25)
+merged_df$new_cluster <- as.character(pam_manhattan$clustering)
+
+```
+
+Analyse the results: tabulate the original and the new clusters assignment
+
+```{r}
+table(merged_df$cluster, merged_df$new_cluster)
+
+```
+
+
+Analyse the results: describe the distributions of the variables by the new cluster
+
+```{r}
+library(dplyr)
+
+cluster_summary <- merged_df %>%
+  group_by(new_cluster) %>%
+  summarise(
+    across(
+      c(
+        quantidade_empregos,
+        quantidade_estabelecimentos,
+        quantidade_visitas_estimadas_internacional,
+        quantidade_visitas_estimadas_nacional,
+        arrecadacao,
+        IBEU
+      ),
+      list(
+        mean = ~mean(.x, na.rm = TRUE),
+        sd = ~sd(.x, na.rm = TRUE),
+        median = ~median(.x, na.rm = TRUE)
+      ),
+      .names = "{.col}_{.fn}"
+    ),
+    .groups = "drop"
+  )
+
+cluster_summary
+```
+
+Let's plot this data using boxplots
+
+```{r}
+long_df <- merged_df %>%
+  select(new_cluster, all_of(continuous_cols)) %>%
+  pivot_longer(-new_cluster, names_to = "variable", values_to = "value")
+
+# Plot
+ggplot(long_df, aes(x = factor(new_cluster), y = value)) +
+  geom_boxplot() +
+  facet_wrap(~ variable, scales = "free_y") +
+  labs(x = "Cluster", y = "Value", title = "Boxplots by Cluster") +
+  theme_minimal()
+```
+
+Save the results in excel format
+
+```{r}
+install.packages("openxlsx")
+library(openxlsx)
+write.xlsx(df, 'data/CLUSTERS_NOVAS_VARIAVEIS_2019.xlsx')
+```
+
