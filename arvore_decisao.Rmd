@@ -1,0 +1,70 @@
+---
+title: "Clusterização Municípios Brasileiros Turismo"
+output: html_notebook
+---
+
+Clusterização dos Municípios Turísticos do Brasil  
+Trabalho de TCC de Graduação em Estatística
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(rpart)
+library(rpart.plot)
+```
+
+
+Manter somente as variáveis independentes e a variável dependente
+
+```{r}
+file_path <- 'data/CLUSTERS_VARIAVEIS_ORIGINAIS_2019.xlsx'
+df <- read_excel(file_path)
+
+continuous_cols <- c(
+  "quantidade_estabelecimentos",
+  "quantidade_empregos",
+  "quantidade_visitas_estimadas_internacional",
+  "quantidade_visitas_estimadas_nacional",
+  "arrecadacao",
+  "cluster"
+  )
+df <- select(df, continuous_cols)
+df$cluster <- as.factor(df$cluster)
+
+```
+
+Ajustar árvore de decisão
+
+```{r}
+tree_model <- rpart(cluster ~ ., 
+                    data = df,
+                    method = "class",
+                    control = rpart.control(
+                      maxdepth = 10,     # Allow deeper trees
+                      minsplit = 2,      # Allow splits with few samples
+                      minbucket = 1,     # Allow small leaves
+                      cp = 0.005        # Very small complexity penalty → more splits
+                    ))
+print(tree_model)
+
+```
+
+Imprimir a árvore
+
+```{r}
+png("decision_tree.png", width = 6000, height = 1200, res = 300)
+rpart.plot(tree_model, type = 3, extra = 104, cex = 0.6) 
+```
+
+Imprimir a acurácia do classificador
+
+```{r}
+predicted <- predict(tree_model, df, type = "class")
+accuracy <- sum(predicted == df$cluster) / nrow(df)
+cat("Accuracy on the full dataset:", round(accuracy * 100, 2), "%\n")
+```
+
+
+
+
